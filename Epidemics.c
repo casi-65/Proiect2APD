@@ -1,4 +1,4 @@
-//#include <mpi.h>
+#include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #define MAX_X_COORD 100
@@ -92,11 +92,54 @@ void read_data(FILE *data, int *N, int *x, int *y, Person **people)
     }
 }
 
+void update_location(Person *p, int width, int height)
+{
+    if (p->dir == NORTH)
+    {
+        p->y += p->amplitude;
+        if (p->y >= height)
+        {
+            p->y = height - 1;
+            p->dir = SOUTH;
+        }
+    }
+    else if (p->dir == SOUTH)
+    {
+        p->y -= p->amplitude;
+        if (p->y < 0)
+        {
+            p->y = 0;
+            p->dir = NORTH;
+        }
+    }
+    else if (p->dir == EAST)
+    {
+        p->x += p->amplitude;
+        if (p->x >= width)
+        {
+            p->x = width - 1;
+            p->dir = WEST;
+        }
+    }
+    else if (p->dir == WEST)
+    {
+        p->x -= p->amplitude;
+        if (p->x < 0)
+        {
+            p->x = 0;
+            p->dir = EAST;
+        }
+    }
+}
+
 int main(int argc, char *argv[])
 {
+    int rank, size;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
     int N;
     int grid_width, grid_height;
-    FILE *data = NULL;
     Person *people = NULL;
     if (argc < 3)
     {
@@ -104,9 +147,14 @@ int main(int argc, char *argv[])
         return 1;
     }
     TOTAL_SIMULATION_TIME = atoi(argv[1]);
-    data = open_file(argv[2]);
-    read_data(data, &N, &grid_width, &grid_height, &people);
-    fclose(data);
+    if (rank == 0)
+    {
+        FILE *data = NULL;
+        data = open_file(argv[2]);
+        read_data(data, &N, &grid_width, &grid_height, &people);
+        fclose(data);
+        printf("Simulation started with %d persons on a %dx%d grid\n", N, grid_width, grid_height);
+    }
     free(people);
     return 0;
 }
