@@ -135,17 +135,17 @@ void update_location(Person *p, int width, int height)
 int main(int argc, char *argv[])
 {
     int rank, size;
+    if (argc < 3)
+    {
+        fprintf(stderr, "Usage: %s <total_simulation_time> <input_file_name>\n", argv[0]);
+        return 1;
+    }
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     int N;
     int grid_width, grid_height;
     Person *people = NULL;
-    if (argc < 3)
-    {
-        fprintf(stderr, "Usage: %s <total_simulation_time> <input_file_name>\n", argv[0]);
-        return 1;
-    }
     TOTAL_SIMULATION_TIME = atoi(argv[1]);
     if (rank == 0)
     {
@@ -155,6 +155,46 @@ int main(int argc, char *argv[])
         fclose(data);
         printf("Simulation started with %d persons on a %dx%d grid\n", N, grid_width, grid_height);
     }
+    MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&grid_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&grid_height, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (rank != 0)
+    {
+        people = init_persons(N);
+    }
+    MPI_Bcast(people, N * sizeof(Person), MPI_BYTE, 0, MPI_COMM_WORLD);
+    int chunk = N / size;
+    int start = rank * chunk;
+    int end = (rank == (size - 1)) ? N : start + chunk;
+    for (int t = 0; t < TOTAL_SIMULATION_TIME; t++)
+    {
+        for (int i = start; i < end; i++)
+        {
+            update_location(&people[i], grid_width, grid_height);
+        }
+        for (int i = start; i < end; i++)
+        {
+            people[i].current_status = people[i].future_status;
+        }
+        MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, people, chunk * sizeof(Person), MPI_BYTE, MPI_COMM_WORLD);
+#ifdef DEBUG
+        if (rank == 0)
+        {
+            printf("\nDEBUG - step %d\n", t + 1);
+            for (int i = 0; i < N; i++)
+            {
+                printf("id %d: (%d,%d) status: %d\n",
+                       people[i].id, people[i].x, people[i].y, people[i].current_status);
+            }
+        }
+#endif
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (rank == 0)
+    {
+        printf("Simulation completed\n");
+    }
     free(people);
+    MPI_Finalize();
     return 0;
 }
