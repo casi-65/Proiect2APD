@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #define MAX_X_COORD 100
 #define MAX_Y_COORD 100
-#define INFECTED_DURATION 100
-#define IMMUNE_DURATION 100
+#define INFECTED_DURATION 5
+#define IMMUNE_DURATION 6
 
 int TOTAL_SIMULATION_TIME;
 
@@ -46,10 +46,10 @@ Person *init_persons(int N)
     return people;
 }
 
-FILE *open_file(char *file_name)
+FILE *open_file(char *file_name, const char *permission)
 {
     FILE *f = NULL;
-    if ((f = fopen(file_name, "r")) == NULL)
+    if ((f = fopen(file_name, permission)) == NULL)
     {
         perror("Error - opening file");
         exit(EXIT_FAILURE);
@@ -88,7 +88,7 @@ void read_data(FILE *data, int *N, int *x, int *y, Person **people)
         (*people)[i].future_status = (Status)status_val;
         (*people)[i].dir = (Direction)dir_val;
         (*people)[i].timer = 0;
-        (*people)[i].infection_count = 0;
+        (*people)[i].infection_count = (status_val == INFECTED) ? 1 : 0;
     }
 }
 
@@ -132,9 +132,49 @@ void update_location(Person *p, int width, int height)
     }
 }
 
+void update_health(Person *people, int N, int start, int end, int rank)
+{
+    for (int i = start; i < end; i++)
+    {
+        people[i].future_status = people[i].current_status;
+        if (people[i].current_status == INFECTED)
+        {
+            people[i].timer++;
+            if (people[i].timer >= INFECTED_DURATION)
+            {
+                people[i].future_status = IMMUNE;
+                people[i].timer = 0;
+            }
+        }
+        else if (people[i].current_status == IMMUNE)
+        {
+            people[i].timer++;
+            if (people[i].timer >= IMMUNE_DURATION)
+            {
+                people[i].future_status = SUSCEPTIBLE;
+                people[i].timer = 0;
+            }
+        }
+        else if (people[i].current_status == SUSCEPTIBLE)
+        {
+            for (int j = 0; j < N; j++)
+            {
+                if ((people[j].current_status == INFECTED) && (people[i].x == people[j].x) && (people[i].y == people[j].y))
+                {
+                    people[i].future_status = INFECTED;
+                    people[i].timer = 0;
+                    people[i].infection_count++;
+                    break;
+                }
+            }
+        }
+    }
+}
+
 int main(int argc, char *argv[])
 {
     int rank, size;
+    FILE *debug_log = NULL;
     if (argc < 3)
     {
         fprintf(stderr, "Usage: %s <total_simulation_time> <input_file_name>\n", argv[0]);
@@ -150,10 +190,13 @@ int main(int argc, char *argv[])
     if (rank == 0)
     {
         FILE *data = NULL;
-        data = open_file(argv[2]);
+        data = open_file(argv[2], "r");
         read_data(data, &N, &grid_width, &grid_height, &people);
         fclose(data);
         printf("Simulation started with %d persons on a %dx%d grid\n", N, grid_width, grid_height);
+#ifdef DEBUG
+        debug_log = open_file("debug_log.txt", "w");
+#endif
     }
     MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&grid_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -166,25 +209,52 @@ int main(int argc, char *argv[])
     int chunk = N / size;
     int start = rank * chunk;
     int end = (rank == (size - 1)) ? N : start + chunk;
+    int *recv_counts = NULL;
+    int *position = NULL;
+    if ((recv_counts = malloc(size * sizeof(int))) == NULL)
+    {
+        fprintf(stderr, "Error - allocate memory\n");
+        exit(EXIT_FAILURE);
+    }
+    if ((position = malloc(size * sizeof(int))) == NULL)
+    {
+        fprintf(stderr, "Error - allocate memory\n");
+        exit(EXIT_FAILURE);
+    }
+    for (int i = 0; i < size; i++)
+    {
+        int r_start = i * chunk;
+        int r_end = (i == size - 1) ? N : (i + 1) * chunk;
+        recv_counts[i] = (r_end - r_start) * sizeof(Person);
+        position[i] = r_start * sizeof(Person);
+    }
     for (int t = 0; t < TOTAL_SIMULATION_TIME; t++)
     {
         for (int i = start; i < end; i++)
         {
             update_location(&people[i], grid_width, grid_height);
         }
+        MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, people, recv_counts, position, MPI_BYTE, MPI_COMM_WORLD);
+        update_health(people, N, start, end, rank);
         for (int i = start; i < end; i++)
         {
             people[i].current_status = people[i].future_status;
         }
-        MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, people, chunk * sizeof(Person), MPI_BYTE, MPI_COMM_WORLD);
+        MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, people, recv_counts, position, MPI_BYTE, MPI_COMM_WORLD);
 #ifdef DEBUG
-        if (rank == 0)
+        if (rank == 0 && debug_log)
         {
-            printf("\nDEBUG - step %d\n", t + 1);
+            fprintf(debug_log, "\nDEBUG - step %d\n", t + 1);
             for (int i = 0; i < N; i++)
             {
-                printf("id %d: (%d,%d) status: %d\n",
-                       people[i].id, people[i].x, people[i].y, people[i].current_status);
+                fprintf(debug_log, "id %d: (%d,%d) status: %d\n", people[i].id, people[i].x, people[i].y, people[i].current_status);
+            }
+            for (int i = 0; i < N; i++)
+            {
+                if (people[i].current_status == INFECTED && people[i].timer == 0 && t > 0)
+                {
+                    fprintf(debug_log, "person %d got infected at (%d,%d) in step %d\n", people[i].id, people[i].x, people[i].y, t + 1);
+                }
             }
         }
 #endif
@@ -193,8 +263,12 @@ int main(int argc, char *argv[])
     if (rank == 0)
     {
         printf("Simulation completed\n");
+        if (debug_log)
+            fclose(debug_log);
     }
     free(people);
+    free(recv_counts);
+    free(position);
     MPI_Finalize();
     return 0;
 }
