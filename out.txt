@@ -1,0 +1,14 @@
+casian@Ghimboasas-MacBook-Pro Proiect2 % mpicc ./Epidemics.c -o Epidemics 
+casian@Ghimboasas-MacBook-Pro Proiect2 % mpiexec -n 4 ./Epidemics 20 ./data2.txt
+Simulation started with 100000 persons on a 60x60 grid
+Serial time: 103.710548 s
+Parallel time: 25.833203 s
+Speedup: 4.014622
+Simulation completed
+casian@Ghimboasas-MacBook-Pro Proiect2 % mpicc ./Epidemics.c -o Epidemics       
+casian@Ghimboasas-MacBook-Pro Proiect2 % mpiexec -n 8 ./Epidemics 20 ./data2.txt
+Simulation started with 100000 persons on a 60x60 grid
+Serial time: 105.457878 s
+Parallel time: 13.443621 s
+Speedup: 7.844455
+Simulation completed

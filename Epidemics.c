@@ -1,6 +1,7 @@
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #define MAX_X_COORD 100
 #define MAX_Y_COORD 100
 #define INFECTED_DURATION 5
@@ -132,7 +133,7 @@ void update_location(Person *p, int width, int height)
     }
 }
 
-void update_health(Person *people, int N, int start, int end, int rank)
+void update_health(Person *people, int N, int start, int end)
 {
     for (int i = start; i < end; i++)
     {
@@ -171,9 +172,39 @@ void update_health(Person *people, int N, int start, int end, int rank)
     }
 }
 
+void run_serial(Person *people, int N, int w, int h)
+{
+    for (int t = 0; t < TOTAL_SIMULATION_TIME; t++)
+    {
+        for (int i = 0; i < N; i++)
+        {
+            update_location(&people[i], w, h);
+        }
+        update_health(people, N, 0, N);
+        for (int i = 0; i < N; i++)
+        {
+            people[i].current_status = people[i].future_status;
+        }
+    }
+}
+
+void save_final_state(char *file_name, Person *people, int N)
+{
+    FILE *f = NULL;
+    f = open_file(file_name, "w");
+    for (int i = 0; i < N; i++)
+    {
+        fprintf(f, "%d %d %d %d\n", people[i].id, people[i].x, people[i].y, people[i].infection_count);
+    }
+    fclose(f);
+}
+
 int main(int argc, char *argv[])
 {
+    int N;
     int rank, size;
+    int grid_width, grid_height;
+    double start_p, end_p, start_s, end_s;
     FILE *debug_log = NULL;
     if (argc < 3)
     {
@@ -183,8 +214,6 @@ int main(int argc, char *argv[])
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
-    int N;
-    int grid_width, grid_height;
     Person *people = NULL;
     TOTAL_SIMULATION_TIME = atoi(argv[1]);
     if (rank == 0)
@@ -197,6 +226,14 @@ int main(int argc, char *argv[])
 #ifdef DEBUG
         debug_log = open_file("debug_log.txt", "w");
 #endif
+        Person *copy_serial = init_persons(N);
+        memcpy(copy_serial, people, N * sizeof(Person));
+        start_s = MPI_Wtime();
+        run_serial(copy_serial, N, grid_width, grid_height);
+        end_s = MPI_Wtime();
+        save_final_state("f_serial_out.txt", copy_serial, N);
+        printf("Serial time: %f s\n", end_s - start_s);
+        free(copy_serial);
     }
     MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&grid_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -228,6 +265,8 @@ int main(int argc, char *argv[])
         recv_counts[i] = (r_end - r_start) * sizeof(Person);
         position[i] = r_start * sizeof(Person);
     }
+    MPI_Barrier(MPI_COMM_WORLD);
+    start_p = MPI_Wtime();
     for (int t = 0; t < TOTAL_SIMULATION_TIME; t++)
     {
         for (int i = start; i < end; i++)
@@ -235,7 +274,7 @@ int main(int argc, char *argv[])
             update_location(&people[i], grid_width, grid_height);
         }
         MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, people, recv_counts, position, MPI_BYTE, MPI_COMM_WORLD);
-        update_health(people, N, start, end, rank);
+        update_health(people, N, start, end);
         for (int i = start; i < end; i++)
         {
             people[i].current_status = people[i].future_status;
@@ -262,6 +301,10 @@ int main(int argc, char *argv[])
     MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0)
     {
+        end_p = MPI_Wtime();
+        printf("Parallel time: %f s\n", end_p - start_p);
+        printf("Speedup: %f\n", (end_s - start_s) / (end_p - start_p));
+        save_final_state("f_parallel_out.txt", people, N);
         printf("Simulation completed\n");
         if (debug_log)
             fclose(debug_log);
